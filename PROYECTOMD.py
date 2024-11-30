@@ -10,7 +10,6 @@ from decimal import Decimal
 import calendar
 import numpy as np
 
-
 def conectar_db():
     try:
         return mysql.connector.connect(
@@ -418,28 +417,81 @@ def cargar_datos(tree, tabla_sql):
         finally:
             db.close()
 
-def crear_tab_clientes_frecuentes():
-    tab = ttk.Frame(notebook)
-    notebook.add(tab, text="Análisis de Clientes")
-    frame = ttk.Frame(tab)
-    frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-    ttk.Label(frame, text="Clientes Frecuentes", font=("Arial", 14)).pack(pady=10)
-    tabla_clientes = ttk.Treeview(frame, columns=("Cliente", "Consumo Total", "Eventos"), show="headings")
-    tabla_clientes.heading("Cliente", text="Cliente")
-    tabla_clientes.heading("Consumo Total", text="Consumo Total")
-    tabla_clientes.heading("Eventos", text="Número de Eventos")
-    tabla_clientes.pack(fill=tk.BOTH, expand=True)
-    scroll_clientes = ttk.Scrollbar(frame, orient="vertical", command=tabla_clientes.yview)
-    tabla_clientes.configure(yscrollcommand=scroll_clientes.set)
-    scroll_clientes.pack(side=tk.RIGHT, fill=tk.Y)
-    mostrar_tabla_clientes(tabla_clientes)
-    ttk.Button(frame, text="Gráfico Clientes Frecuentes", command=lambda: mostrar_grafico_clientes(frame)).pack(pady=10)
-
-def obtener_clientes_frecuentes():
+def obtener_clientes_segmentados():
     db = conectar_db()
     cursor = db.cursor()
     cursor.execute("""
-        SELECT c.cli_nombre, SUM(e.eve_preciototal) AS consumo_total, COUNT(e.eve_id) AS num_eventos
+        SELECT 
+            c.cli_nombre,
+            DATEDIFF(CURDATE(), MAX(e.eve_fecha)) AS recency,
+            COUNT(e.eve_id) AS frequency,
+            SUM(e.eve_preciototal) AS monetary
+        FROM cliente c
+        JOIN evento e ON c.cli_id = e.eve_cli_id
+        GROUP BY c.cli_id
+    """)
+    datos = cursor.fetchall()
+    db.close()
+
+    clientes_segmentados = []
+    for nombre, recency, frequency, monetary in datos:
+        if recency <= 30 and frequency >= 5 and monetary >= 1000:
+            segmento = "Cliente Leal"
+        elif recency <= 60 and frequency >= 3:
+            segmento = "Cliente Frecuente"
+        elif recency <= 90:
+            segmento = "Cliente Ocasional"
+        else:
+            segmento = "Cliente Inactivo"
+
+        clientes_segmentados.append((nombre, recency, frequency, monetary, segmento))
+
+    return clientes_segmentados
+
+
+def mostrar_tabla_clientes(tabla):
+    datos = obtener_clientes_segmentados()
+    tabla["columns"] = ("Cliente", "Recency", "Frequency", "Monetary", "Segmento")
+    tabla.heading("Cliente", text="Cliente")
+    tabla.heading("Recency", text="Recencia (días)")
+    tabla.heading("Frequency", text="Frecuencia (compras)")
+    tabla.heading("Monetary", text="Monetario ($)")
+    tabla.heading("Segmento", text="Segmento")
+
+    for cliente, recency, frequency, monetary, segmento in datos:
+        tabla.insert("", "end", values=(cliente, recency, frequency, monetary, segmento))
+
+
+def mostrar_grafico_clientes(frame):
+    datos = obtener_clientes_segmentados()
+    segmentos = [fila[4] for fila in datos]
+
+    from collections import Counter
+    conteo_segmentos = Counter(segmentos)
+
+    segmentos = list(conteo_segmentos.keys())
+    cantidades = list(conteo_segmentos.values())
+
+    for widget in frame.winfo_children():
+        if isinstance(widget, FigureCanvasTkAgg):
+            widget.get_tk_widget().destroy()
+
+    fig, ax = plt.subplots()
+    ax.bar(segmentos, cantidades, color="blue")
+    ax.set_title("Distribución de Clientes por Segmento")
+    ax.set_xlabel("Segmento")
+    ax.set_ylabel("Cantidad de Clientes")
+
+    canvas = FigureCanvasTkAgg(fig, master=frame)
+    canvas.draw()
+    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+
+def obtener_top_clientes():
+    db = conectar_db()
+    cursor = db.cursor()
+    cursor.execute("""
+        SELECT c.cli_nombre, SUM(e.eve_preciototal) AS consumo_total
         FROM cliente c
         JOIN evento e ON c.cli_id = e.eve_cli_id
         GROUP BY c.cli_id
@@ -450,31 +502,46 @@ def obtener_clientes_frecuentes():
     db.close()
     return datos
 
-def mostrar_tabla_clientes(tabla):
-    datos = obtener_clientes_frecuentes()
-    for cliente, consumo, eventos in datos:
-        tabla.insert("", "end", values=(cliente, consumo, eventos))
+
+def mostrar_tabla_top_clientes(tabla):
+    datos = obtener_top_clientes()
+    tabla["columns"] = ("Cliente", "Consumo Total")
+    tabla.heading("Cliente", text="Cliente")
+    tabla.heading("Consumo Total", text="Consumo Total ($)")
+
+    for cliente, consumo in datos:
+        tabla.insert("", "end", values=(cliente, consumo))
 
 
-def mostrar_grafico_clientes(frame):
-    datos = obtener_clientes_frecuentes()
-    nombres = [fila[0] for fila in datos]
-    consumos = [fila[1] for fila in datos]
+def crear_tab_clientes_segmentados():
+    tab = ttk.Frame(notebook)
+    notebook.add(tab, text="Segmentación de Clientes")
+    frame = ttk.Frame(tab)
+    frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
-    for widget in frame.winfo_children():
-        if isinstance(widget, FigureCanvasTkAgg):
-            widget.get_tk_widget().destroy()
+    ttk.Label(frame, text="Segmentación de Clientes (RFM)", font=("Arial", 14)).pack(pady=10)
 
-    fig, ax = plt.subplots()
-    ax.barh(nombres, consumos, color="green")
-    ax.set_title("Clientes Frecuentes")
-    ax.set_xlabel("Consumo Total")
-    ax.set_ylabel("Clientes")
+    ttk.Label(frame, text="Clasificación por Modelo RFM", font=("Arial", 12)).pack(pady=5)
+    tabla_clientes_rfm = ttk.Treeview(frame, show="headings")
+    tabla_clientes_rfm.pack(fill=tk.BOTH, expand=True, pady=5)
 
-    canvas = FigureCanvasTkAgg(fig, master=frame)
-    canvas.draw()
-    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    scroll_rfm = ttk.Scrollbar(frame, orient="vertical", command=tabla_clientes_rfm.yview)
+    tabla_clientes_rfm.configure(yscrollcommand=scroll_rfm.set)
+    scroll_rfm.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
 
+    mostrar_tabla_clientes(tabla_clientes_rfm)
+
+    ttk.Label(frame, text="Top 5 Clientes con Mayor Consumo", font=("Arial", 12)).pack(pady=5)
+    tabla_top_clientes = ttk.Treeview(frame, show="headings")
+    tabla_top_clientes.pack(fill=tk.BOTH, expand=True, pady=5)
+
+    scroll_top = ttk.Scrollbar(frame, orient="vertical", command=tabla_top_clientes.yview)
+    tabla_top_clientes.configure(yscrollcommand=scroll_top.set)
+    scroll_top.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+
+    mostrar_tabla_top_clientes(tabla_top_clientes)
+
+    ttk.Button(frame, text="Gráfico por Segmentos", command=lambda: mostrar_grafico_clientes(frame)).pack(pady=10)
 
 def crear_tab_ventas_por_mes():
     tab = ttk.Frame(notebook)
@@ -546,12 +613,10 @@ def mostrar_grafico_ventas(frame):
     meses = [calendar.month_name[mes] for mes, _ in datos]
     totales = [total for _, total in datos]
 
-    # Eliminar gráficos existentes antes de agregar uno nuevo
     for widget in frame.winfo_children():
         if isinstance(widget, FigureCanvasTkAgg):
             widget.get_tk_widget().destroy()
 
-    # Crear gráfico
     fig = Figure(figsize=(8, 5))
     ax = fig.add_subplot(111)
     ax.bar(meses, totales, color="blue")
@@ -905,7 +970,7 @@ crear_tab_con_filtro_por_mes_y_cliente(
     "eve_id", 
     ["Fecha", "N° Personas", "Lugar", "Precio Total", "Tipo", "Pago", "Tipo de pago", "Cliente"] 
 )
-crear_tab_clientes_frecuentes()
+crear_tab_clientes_segmentados()
 crear_tab_ventas_por_mes()
 crear_tab_analisis_geografico()
 crear_tab_prediccion_demanda(notebook)
