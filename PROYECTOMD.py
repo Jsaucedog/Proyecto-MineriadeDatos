@@ -282,11 +282,15 @@ def borrar_registro(tabla_sql, id_campo, tree):
     query = f"DELETE FROM {tabla_sql} WHERE {id_campo} = %s"
     ejecutar_query(query, (item_id,), tree, tabla_sql)
 
-def crear_tab_con_filtro_por_mes(tabla_sql, columnas, id_campo, nombres_campos):
+def crear_tab_con_filtro_por_mes_y_cliente(tabla_sql, columnas, id_campo, nombres_campos):
     tab = ttk.Frame(notebook)
     notebook.add(tab, text=tabla_sql.capitalize())
+    
+    # Frame para filtros
     filtro_frame = tk.Frame(tab)
     filtro_frame.pack(pady=10)
+
+    # Filtro por mes
     filtro_label = tk.Label(filtro_frame, text="Filtrar por mes: ")
     filtro_label.pack(side=tk.LEFT, padx=5)
     meses = [calendar.month_name[i] for i in range(1, 13)]
@@ -294,21 +298,31 @@ def crear_tab_con_filtro_por_mes(tabla_sql, columnas, id_campo, nombres_campos):
     filtro_mes.set("")
     filtro_mes.pack(side=tk.LEFT, padx=5)
 
+    # Filtro por cliente
+    cliente_label = tk.Label(filtro_frame, text="Filtrar por cliente: ")
+    cliente_label.pack(side=tk.LEFT, padx=5)
+    filtro_cliente = tk.Entry(filtro_frame, width=20)
+    filtro_cliente.pack(side=tk.LEFT, padx=5)
+
     def aplicar_filtro():
         mes = filtro_mes.get()
-        if mes:
-            filtrar_por_mes(tree, tabla_sql, mes)
+        cliente = filtro_cliente.get()
+        if mes or cliente:
+            filtrar_por_mes_y_cliente(tree, tabla_sql, mes, cliente)
         else:
             cargar_datos(tree, tabla_sql)
 
     def borrar_filtro():
         filtro_mes.set("")
+        filtro_cliente.delete(0, tk.END)
         cargar_datos(tree, tabla_sql)
 
     filtro_btn = ttk.Button(filtro_frame, text="Aplicar Filtro", command=aplicar_filtro)
     filtro_btn.pack(side=tk.LEFT, padx=5)
     borrar_filtro_btn = ttk.Button(filtro_frame, text="Borrar Filtro", command=borrar_filtro)
     borrar_filtro_btn.pack(side=tk.LEFT, padx=5)
+
+    # Frame para formularios y botones
     frm = tk.Frame(tab)
     frm.pack(pady=10)
     entradas = []
@@ -317,8 +331,10 @@ def crear_tab_con_filtro_por_mes(tabla_sql, columnas, id_campo, nombres_campos):
         entrada = tk.Entry(frm)
         entrada.grid(row=i, column=1, pady=5, padx=5)
         entradas.append(entrada)
+
     tree = configurar_treeview(tab, columnas)
     cargar_datos(tree, tabla_sql)
+
     ttk.Button(frm, text="Agregar", command=lambda: agregar_registro(tabla_sql, entradas, tree)).grid(row=len(nombres_campos), column=0, pady=10)
     ttk.Button(frm, text="Eliminar", command=lambda: borrar_registro(tabla_sql, id_campo, tree)).grid(row=len(nombres_campos), column=2, pady=10)
 
@@ -332,7 +348,7 @@ def crear_tab_con_filtro_por_mes(tabla_sql, columnas, id_campo, nombres_campos):
 
     tree.bind("<<TreeviewSelect>>", seleccionar_registro)
 
-def filtrar_por_mes(tree, tabla_sql, mes):
+def filtrar_por_mes_y_cliente(tree, tabla_sql, mes, cliente):
     for item in tree.get_children():
         tree.delete(item)
 
@@ -340,22 +356,39 @@ def filtrar_por_mes(tree, tabla_sql, mes):
     if db:
         cursor = db.cursor()
         try:
-            mes_numero = list(calendar.month_name).index(mes)
-            query = """
+            mes_condicion = ""
+            cliente_condicion = ""
+            parametros = []
+
+            if mes:
+                mes_numero = list(calendar.month_name).index(mes)
+                mes_condicion = "MONTH(e.eve_fecha) = %s"
+                parametros.append(mes_numero)
+
+            if cliente:
+                cliente_condicion = "c.cli_nombre LIKE %s"
+                parametros.append(f"%{cliente}%")
+
+            # Construir la consulta dinámica según los filtros aplicados
+            condiciones = " AND ".join(filter(None, [mes_condicion, cliente_condicion]))
+            query = f"""
             SELECT e.eve_id, e.eve_fecha, e.eve_numero_personas, e.eve_lugar, 
                    e.eve_preciototal, e.eve_tipo, e.eve_pago, e.eve_tipodepago, 
                    c.cli_nombre
             FROM evento e
             LEFT JOIN cliente c ON e.eve_cli_id = c.cli_id
-            WHERE MONTH(e.eve_fecha) = %s
             """
-            cursor.execute(query, (mes_numero,))
+            if condiciones:
+                query += f" WHERE {condiciones}"
+
+            cursor.execute(query, tuple(parametros))
             for row in cursor.fetchall():
                 tree.insert("", tk.END, values=row)
         except mysql.connector.Error as err:
             messagebox.showerror("Error", f"No se pudo filtrar: {err}")
         finally:
             db.close()
+
 
 def cargar_datos(tree, tabla_sql):
     for item in tree.get_children():
@@ -866,7 +899,7 @@ crear_tab_con_filtro_por_nombre_y_letra(
     "cli_id", 
     ["Nombre", "Teléfono"]
 )
-crear_tab_con_filtro_por_mes(
+crear_tab_con_filtro_por_mes_y_cliente(
     "evento", 
     ["ID", "Fecha", "N° Personas", "Lugar", "Precio Total", "Tipo", "Pago", "Tipo de pago", "Cliente"], 
     "eve_id", 
